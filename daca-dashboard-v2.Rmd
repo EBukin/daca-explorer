@@ -1,0 +1,476 @@
+---
+title: "DACA dashboard"
+author: "Eduard Bukin"
+output: 
+  flexdashboard::flex_dashboard:
+    vertical_layout: scroll
+runtime: shiny
+---
+
+```{r}
+library(tidyverse)
+library(ggrepel)
+library(flexdashboard)
+library(shiny)
+library(googleVis)
+
+
+source("help-funs.R")
+
+pd <-
+  read_rds("clean-data/analysis_data.rds") %>%
+  filter(year > 1990, !is.na(country_code)) %>%
+  mutate(
+    income = factor(income, levels = c("Low income", "Lower middle income", "Upper middle income", "High income")),
+    country = factor(country, levels = sort(unique(pull(., country)))),
+    region = factor(region),
+    `Variable group` = ifelse(is.na(`Variable group`), "", `Variable group`),
+    var = str_c(`Source`, " - ", ifelse(`Variable group` == "", "", str_c(`Variable group`, " - ")), var)
+  ) %>% 
+  arrange(Source, var, country, year)
+
+bubles_data <- 
+  pd %>% 
+  select(-var_code, - Source, -`Variable group`, -flag) %>%
+  spread(var, val) %>% 
+  arrange(country, year)
+
+bubles_calc_data <- 
+  pd %>% 
+  select(-var, - Source, -`Variable group`, -flag) %>%
+  spread(var_code, val)  %>% 
+  arrange(country, year)
+
+axis_vars <-
+  c(
+    `NOTHING` = "nothing",
+    `.Agricultural transformation index` = "ag_transform",
+    set_names(
+      distinct(pd, var, Source, var_code)$var_code,
+      distinct(pd, var, var_code)$var
+    )
+  )
+
+colour_vars <-
+  c(
+    `Income group` = "income",
+    `Region` = "region",
+    `Country` = "country_code"
+  )
+colour_vars_extended <- 
+  c(colour_vars, axis_vars)
+  
+countries_list <-
+  c(
+    set_names(
+      distinct(pd, country, country_code)$country_code,
+      distinct(pd, country, country_code)$country
+    )
+  )
+
+region_list <-
+  set_names(
+      distinct(pd, region, region_code)$region_code,
+      distinct(pd, region, region_code)$region
+    )
+
+
+countries_region_list <-
+   distinct(pd, country, country_code, region_code)
+
+  # distinct(pd, country, country_code, region) %>%
+  # distinct(pd, country, country_code, region) %>%
+  # mutate(region2 = as.character(region)) %>% 
+  # group_by(region) %>%
+  # nest() %>%
+  # as.list() %>%
+  # .$data %>% 
+  # map(.f = function(.x) {
+  #   # browser()
+  #   a <- list()
+  #   a[[unique(.x$region2)]] <- 
+  #     set_names(
+  #       .x$country_code,
+  #       .x$country
+  #       )
+  #   names(a) <- unique(.x$region2)
+  #   a
+  # })
+
+get_var <- function(var_code, ax_var = axis_vars) {
+  ax_var[ax_var%in%var_code]
+}
+tags$style(type="text/css", "#output_id.recalculating { opacity: 1.0; }")
+
+```
+
+
+
+Agricultural transformation
+=====================================  
+
+
+### Ag. transformation bubles new {data-height=4000}
+
+```{r}
+fluidPage(
+  fluidRow(
+    column(6, selectInput("x_var", "X axis", axis_vars[axis_vars != "nothing"], get_var("SL.AGR.EMPL.ZS"), FALSE, TRUE, width = "100%")),
+    column(6, selectInput("y_var", "Y axis", axis_vars[axis_vars != "nothing"], get_var("NV.AGR.TOTL.ZS"), FALSE, TRUE, width = "100%"))
+    ),
+  fluidRow(
+    column(6, selectInput("size_var", "Size of the buble", axis_vars[axis_vars != "nothing"], get_var("ndx.scr.gsm.ndx"), FALSE, TRUE, width = "100%")),
+    column(5, selectInput("colour_var", "Colouring of the buble", colour_vars_extended, "income", FALSE, TRUE, width = "100%")),
+    column(1, checkboxInput("show_col_legend", "Show colour legend", TRUE))
+    ),
+  # tags$hr(),
+  
+  fluidRow(
+    column(4, selectInput("trace_regions", "Select all countries in a region", choices = region_list, NULL, TRUE, width = "100%")),
+    column(7, selectInput("trace_countries", "Select countries to trace on the plot",choices =  countries_list, NULL, TRUE, TRUE, width = "100%")),
+    column(1, checkboxInput("show_country_labels", "Show country labels", TRUE, width = "100%"))
+  ),
+  # tags$hr(),
+  fluidRow(
+    column(6, sliderInput("active_year", "Year of analysis", 1990, 2017, 2015, step = 1, round = 0, ticks = TRUE, width = "100%", sep = "", animate = TRUE)),
+    column(6, selectInput("index_var_2", "Variables for 'Agricultural transformation index'", choices = axis_vars[!axis_vars %in% c("nothing", "ag_transform")], get_var(c("SL.AGR.EMPL.ZS", "NV.AGR.TOTL.ZS")),TRUE, TRUE, width = "100%"))
+  ),
+  fluidRow(
+    column(12, plotOutput("ggbubles", brush = brushOpts( id = "plot1_brush")))
+        ),
+  fluidRow(
+    # column(6, verbatimTextOutput("click_info")),
+    column(12, tableOutput("brush_info"))
+    ),
+  tags$hr(),
+  fluidRow(
+    column(2, numericInput("plot_width", "Width of the plot in cm", value = 22, min = 1, step = 1)),
+    column(2, numericInput("plot_heights", "Heights of the plot in cm", value = 13, min = 1, step = 1)),
+    column(2, numericInput("plot_res", "Resolution of the plot, dpi", value = 300, min = 72, step = 10)),
+    column(3, radioButtons("plot_format", "Resolution of the plot, dpi", choices = c("jpeg", "png", "pdf", "svg", "eps", "bmp"), selected = "png"), inline = TRUE),
+    column(1, downloadButton("plot_dwnld", "Download plot"))
+  ),
+  fluidRow(
+    column(4, downloadButton("downloadDataBublesData", label = "Download entire dataset")),
+    column(4, downloadButton("downloadPlotData", label = "Download plot data"))
+  )
+)
+
+
+# output$click_info <- renderPrint({
+#   # Because it's a ggplot2, we don't need to supply xvar or yvar; if this
+#   # were a base graphics plot, we'd need those.
+#   nearPoints(buble_data_ggplot(), input$plot1_click, addDist = TRUE, threshold = 10, maxpoints = 10) %>% 
+#       select(country, year, input$x_var, input$y_var) %>%
+#     magrittr::set_colnames(c("country",  "Year", names(c(get_var(input$x_var), get_var(input$y_var)))))
+# })
+
+output$brush_info <- renderTable({
+  brushedPoints(buble_data_ggplot(), input$plot1_brush) %>% 
+      select(country, country_code, income, region, year, input$x_var, input$y_var) %>%
+    filter(!is.na(year), year == input$active_year) %>% 
+    magrittr::set_colnames(c("Country", "Country code", "Income group", "Region", "Year", names(c(get_var(input$x_var), get_var(input$y_var)))))
+})
+
+observe({
+  selected_regions <- input$trace_regions
+  if (is.null(selected_regions)) {
+    updateSelectInput(session, "trace_countries", selected = "")
+  } else if (selected_regions[[1]] == "") {
+    updateSelectInput(session, "trace_countries", selected = "")
+  } else {
+    new_countries_selection <- filter(countries_region_list, region_code %in% selected_regions)$country_code
+    updateSelectInput(session, "trace_countries", selected = new_countries_selection)
+  }
+})
+
+collected_countries <- reactive({
+  trace_countries <- input$trace_countries
+  if (all(trace_countries == "")) trace_countries <- NULL
+  return(trace_countries)
+})
+
+collected_deb_countries <- 
+  collected_countries %>% 
+  debounce(2500)
+
+buble_data_ggplot <-
+  reactive({
+    
+    req(input$index_var_2)
+
+    x_var <- get_var(input$x_var)
+    y_var <- get_var(input$y_var)
+    size_var <- get_var(input$size_var)
+    year_show <- input$active_year
+    trace_countries <- collected_deb_countries()
+    colour_var <- colour_vars_extended[colour_vars_extended == input$colour_var]
+    
+    if (colour_var == "nothing") colour_var <- NULL
+    if (size_var == "NOTHING") size_var <- NULL
+    if (all(trace_countries == "")) trace_countries <- NULL
+    
+    # print(x_var)
+    # print(y_var)
+    # print(size_var)
+    # print(year_show)
+    # print(trace_countries)
+    # print(colour_var)
+    # print(input$index_var_2)
+    # length(input$index_var_2)
+    # print(input$show_country_labels)
+    # print(input$show_col_legend)
+    
+    bubles_calc_data_local <-
+      bubles_calc_data
+
+    if (length(input$index_var_2) > 1) {
+      bubles_calc_data_local <-
+        bubles_calc_data_local %>%
+        mutate(
+          ag_transform = NA,
+          ag_transform = select(., input$index_var_2) %>% reduce(dist_origin),
+          ag_transform = if_else(ag_transform < 1, 1, ag_transform),
+          ag_transform = 1 / ag_transform * 100
+        )
+    } else {
+      bubles_calc_data_local <-
+        bubles_calc_data_local %>%
+        mutate(
+          ag_transform = NA
+        )
+    }
+    
+    bubles_calc_data_local %>% 
+      dplyr::select(
+        year, country_code, country, region_code, region,
+        income_code, income, c(x_var, y_var, size_var, colour_var)
+      ) %>%
+      filter(year == year_show | country_code %in% trace_countries & year <= year_show) %>% 
+      ungroup() %>% 
+      arrange(country_code, year) %>% 
+      mutate(
+        alpha_val = 1,
+        tracable = !is.null(trace_countries[[1]]) & country_code %in% trace_countries,
+        alpha_val = if_else(tracable & year == year_show, 1, 0.4, 1),
+        alpha_val = if_else(tracable & year != year_show, 0.7, alpha_val, 1),
+        traces_lable = if_else(tracable & year == year_show, country_code, NA_character_),
+        missing_size_point = !is.null(size_var) & is.na(eval(parse(text = size_var))),
+        x_missing = if_else(missing_size_point, eval(parse(text = x_var)), NA_real_),
+        y_missing = if_else(missing_size_point, eval(parse(text = y_var)), NA_real_),
+        nothing = 1
+      )
+  })
+
+
+ggbubles_plot <-
+  reactive({
+    
+    x_var <- get_var(input$x_var)
+    y_var <- get_var(input$y_var)
+    size_var <- get_var(input$size_var)
+    year_show <- input$active_year
+    trace_countries <- collected_deb_countries()
+    colour_var <- colour_vars_extended[colour_vars_extended == input$colour_var]
+    
+    if (size_var == "NOTHING") size_var <- NULL
+    if (all(trace_countries == "")) trace_countries <- NULL
+    
+    ggp <- 
+      buble_data_ggplot() %>%
+      ggplot() +
+      aes_string(
+        x = x_var,
+        y = y_var,
+        fill = colour_var,
+        colour = colour_var
+      ) +
+      geom_point(aes_string(size = size_var, alpha = "alpha_val")) +
+      geom_point(aes_string(x = "x_missing", y = "y_missing", alpha = "alpha_val"), shape = 8, show.legend = FALSE) +
+      geom_path(aes_string(group = "country"), show.legend = FALSE) +
+      scale_alpha(range = c(0.3, 1)) +
+      # scale_color_wb(name = names(colour_var), discrete = TRUE) +
+      scale_size(name = names(size_var)) +
+      guides(
+        fill = "none",
+        alpha = "none",
+        group = "none",
+        size = guide_legend(order = 1, override.aes = list(colour = wb_col("red")))
+      ) +
+      xlab(names(x_var)) +
+      ylab(names(y_var)) +
+      theme_bw()
+    
+    if (colour_var %in% colour_vars) {
+      p <- p + scale_color_wb(discrete = TRUE)
+    } else if (colour_var != "nothing") {
+      p <- p + scale_color_wb(discrete = FALSE)
+    } else {
+      scale_color_manual(values = "blue")
+    }
+
+    if (input$show_country_labels) {
+      ggp <-
+        ggp +
+        geom_label_repel(
+          aes_string(label = "traces_lable"), 
+          colour = "black",
+          fontface = "bold", 
+          size = 3.5,
+          segment.alpha = 0.5,
+          show.legend = FALSE, nudge_y = 5)
+    }
+
+    if (input$show_col_legend & colour_var != "nothing") {
+      set.seed(100)
+      ggp <-
+        ggp +
+        guides(colour = guide_legend(title = names(colour_var), order = 2, override.aes = list(size = 5)))
+    } else {
+      ggp <-
+        ggp +
+        guides(colour = "none")
+    }
+    
+    ggp
+  })
+
+output$ggbubles <- renderPlot({ggbubles_plot()},  height = 600)
+
+# plot_inputs <- reactive({
+#   list(
+#     w = inputs$plot_width,
+#     h = inputs$plot_heights,
+#     res = inputs$plot_res,
+#     form = inputs$plot_format
+#   )
+# })
+
+output$plot_dwnld <- downloadHandler(
+  filename = function() {
+    paste("plot-", Sys.Date(), ".", input$plot_format, sep = "")
+  },
+  content = function(con) {
+    ggsave(con, ggbubles_plot(), units = "cm", width = input$plot_width,  height = input$plot_heights, dpi = input$plot_res)
+  }
+)
+
+output$downloadPlotData <- downloadHandler(
+  filename = function() {
+    paste('daca-data-plot', Sys.Date(), '.csv', sep='')
+  },
+  content = function(con) {
+    readr::write_excel_csv(buble_data_ggplot(), con)
+  }
+)
+
+```
+
+
+
+Ag. transformation bubles (flash based)
+=====================================  
+
+### Ag. transformation bubles
+
+```{r}
+fluidPage(
+  # fluidRow(h4("")),
+  fluidRow(
+    selectInput("index_var_1",
+            "Variables used for constructing 'Agricultural transformation index'",
+            choices = axis_vars,
+            multiple = TRUE,
+            selected = axis_vars[axis_vars %in% c("SL.AGR.EMPL.ZS", "NV.AGR.TOTL.ZS")],
+            width = "100%")
+  ),
+  fluidRow(p("You need to select at least two or more variable to calculate agriculturel transformation index.")),
+  fluidRow(p("Every time you select new combination of variables, plot get updated to the initial values")),
+  fluidRow(downloadButton("downloadDataBublesData2", label = "Download data")),
+  fluidRow(uiOutput("dynamic"))
+)
+
+buble_data_out <-
+  reactive({
+    req(input$index_var_1)
+    if(length(input$index_var_1) < 2) return(bubles_data)
+    bubles_data %>%
+      mutate(
+        `.Agricultural transformation index` = select(bubles_calc_data, input$index_var_1) %>% reduce(dist_origin),
+        `.Agricultural transformation index` = if_else(`.Agricultural transformation index` < 1, 1, `.Agricultural transformation index`),
+        `.Agricultural transformation index` = 1 / `.Agricultural transformation index`
+      )
+  })
+
+
+output$downloadDataBublesData <- downloadHandler(
+  filename = function() {
+    paste('daca-data-full', Sys.Date(), '.csv', sep='')
+  },
+  content = function(con) {
+    readr::write_excel_csv(buble_data_out(), con)
+  }
+)
+
+output$downloadDataBublesData2 <- downloadHandler(
+  filename = function() {
+    paste('daca-data-full', Sys.Date(), '.csv', sep='')
+  },
+  content = function(con) {
+    readr::write_excel_csv(buble_data_out(), con)
+  }
+)
+
+```
+
+
+Data availability and imputations
+=====================================  
+  
+### Ag. transformation bubles
+  
+```{r}
+availability <- 
+  pd %>%
+  group_by(Source, `Variable group`, var, flag, year) %>%
+  count() %>%
+  ungroup() %>%
+  # filter(year > 1995) %>%
+  # mutate(val = str_c(flag, " ", n, "\n")) %>%
+  # select(-n) %>%
+  ungroup() %>%
+  spread(flag, n) %>%
+  mutate_at(vars(Imputed, Missing, Original), funs(ifelse(is.na(.), 0, .))) %>%
+  mutate(status = str_c(
+    ifelse(Original > 0, str_c("Original: ", Original, "\n"), ""),
+    ifelse(Imputed > 0, str_c("Imputed: ", Imputed, "\n"), ""),
+    ifelse(Missing > 0, str_c("Missing: ", Missing, "\n"), "")
+  )) %>%
+  select(-Imputed,-Missing,-Original) %>%
+  spread(year, status) %>%
+  arrange(Source, `Variable group`, var) %>%
+  rename(Variable = var) %>%
+  select(matches("\\D"), sort(names(.)[str_detect(names(.), "^(\\d{4})")], decreasing = T))
+
+DT::renderDataTable( #
+  DT::datatable(
+    availability,
+    rownames = FALSE,
+    extensions = c("Buttons", "Scroller"),
+    options = list(
+      pageLength = 25,
+      dom = c("Bfrtip"),
+      scrollX = TRUE,
+      # fixedColumns = list(leftColumns = 1),
+      deferRender = TRUE,
+      scrollY = 400,
+      scroller = TRUE,
+      buttons = list(
+        list(extend = "copy", text = "Copy table"),
+        list(extend = "excel", text = "Download table", title = "availability")
+      )
+    )
+  )
+)
+```
+

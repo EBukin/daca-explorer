@@ -1,0 +1,557 @@
+---
+title: "DACA dashboard"
+author: "Eduard Bukin"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+# library(ggwb)
+library(flexdashboard)
+library(shiny)
+library(googleVis)
+
+# Loading data
+pd <-
+  read_rds("clean-data/analysis_data.rds") %>%
+  filter(!is.na(country_code)) %>%
+  mutate(
+    income = factor(income, levels = c("Low income", "Lower middle income", "Upper middle income", "High income")),
+    country = factor(country, levels = sort(unique(pull(., country))))
+  ) %>% 
+  mutate(
+    `Variable group` = ifelse(is.na(`Variable group`), "", `Variable group`),
+    var = str_c(`Source`, " - ", ifelse(`Variable group` == '', '', str_c(`Variable group`, " - ")), var)) %>% 
+  # select(-var_code, - Source, -`Variable group`, -flag)%>%
+  # mutate(
+  #   var = ifelse(Source == "GSMA", str_c(`Variable group`, " - ", var), var),
+  #   var = ifelse(Source == "Digital Adoption Index", str_c("DAI - ", var), var),
+  #   var = ifelse(Source == "WDI", str_c("WDI - ", var), var)
+  # ) %>%
+  arrange(Source, var, country, year)
+
+bubles_data <- 
+   read_rds("clean-data/google_vis_data.rds") 
+
+axis_vars <-
+  c(
+    `NOTHING` = "nothing",
+    set_names(
+      distinct(pd, var, Source, var_code)$var_code,
+      distinct(pd, var, var_code)$var
+    )
+  )
+
+group_vars <-
+  c(
+    `Income group` = "income",
+    `Region` = "region",
+    `k-mean clusters` = "cluster"
+  )
+
+wb_col <- function(...) {
+  wb_colors <- c(
+    `Solid Blue` = "#002244",
+    `Bright Blue` = "#009FDA",
+    `orange` = "#F05023",
+    `yellow` = "#FDB714",
+    `red` = "#EB1C2D",
+    `brown` = "#F78D28",
+    `blue` = "#009CA7",
+    `green` = "#00AB51",
+    `purple` = "#872B90",
+    `light_blue` = "#00A996"
+  )
+
+  cols <- c(...)
+
+  if (is.null(cols)) {
+    return(wb_colors)
+  }
+
+  wb_colors[cols]
+}
+
+wb_pal <- function(palette = "main", reverse = FALSE, ...) {
+  wb_palettes <- list(
+    `main` = wb_col("red", "yellow", "green", "blue", "purple")
+  )
+
+  pal <- wb_palettes[[palette]]
+
+  if (reverse) pal <- rev(pal)
+
+  colorRampPalette(pal, ...)
+}
+scale_color_wb <- function(palette = "main", discrete = TRUE, reverse = FALSE, ...) {
+  pal <- wb_pal(palette = palette, reverse = reverse)
+
+  if (discrete) {
+    discrete_scale("colour", paste0("wb_", palette), palette = pal, ...)
+  } else {
+    scale_color_gradientn(colours = pal(256), ...)
+  }
+}
+
+scale_fill_wb <- function(palette = "main", discrete = TRUE, reverse = FALSE, ...) {
+  pal <- wb_pal(palette = palette, reverse = reverse)
+
+  if (discrete) {
+    discrete_scale("fill", paste0("wb_", palette), palette = pal, ...)
+  } else {
+    scale_fill_gradientn(colours = pal(256), ...)
+  }
+}
+
+
+# Used functions
+plot_scattered_countries <- function(plot_data, x_var, y_var, radius_var, colour_var, shape_var = NULL) {
+  # if (radius_var == "nothing") radius_var <- NULL
+  plot_data %>%
+    drop_na() %>%
+    ggplot() +
+    aes_string(x = x_var, y = y_var, size = radius_var, colour = colour_var, fill = colour_var) +
+    geom_point(position = "jitter", aes(alpha = 0.9)) +
+    scale_color_wb(name = names(colour_var), discrete = TRUE) +
+    scale_radius(name = names(radius_var)) +
+    guides(
+      fill = "none",
+      alpha = "none",
+      # shape = guide_legend(order = 2, override.aes = list(size=5, colour=wb_col("red"))),
+      size = guide_legend(order = 1, override.aes = list(colour = wb_col("red"))),
+      colour = guide_legend(order = 2, override.aes = list(size = 5))
+    ) +
+    xlab(names(x_var)) +
+    ylab(names(y_var)) +
+    theme_bw()
+}
+```
+
+
+
+Agricultural transformation {data-orientation=rows}
+=====================================  
+
+
+Row {.tabset}
+-------------------------------------
+
+### Agricultural transformation 
+
+```{r}
+# create a ui interaction:
+uiOutput("dynamic")
+
+# render the ui:
+output$dynamic <- renderUI({
+  htmlOutput("data_bubles")
+})
+
+# here is your server activity:
+output$data_bubles <- renderGvis({
+  gvisMotionChart(
+    data = bubles_data,
+    idvar = "country",
+    timevar = "year",
+    xvar = "WDI - Employment in agriculture (% of total employment) (modeled ILO estimate)",
+    yvar = "WDI - Agriculture, forestry, and fishing, value added (% of GDP)",
+    colorvar = "region",
+    sizevar = "Digital Adoption Index - Digital Adoption Index",
+    date.format = "YYYY",
+    options = list(width = "1200", height = "700")
+  )
+})
+
+```
+
+
+### Bubbles data download
+
+
+```{r}
+fluidPage(
+  
+fluidRow(
+    DT::renderDataTable( #
+      DT::datatable(
+        bubles_data,
+        rownames = FALSE,
+        extensions = c("Buttons", "Scroller"),
+        options = list(
+          pageLength = 40,
+          dom = c("Bfrtip"),
+          scrollX = TRUE,
+          # fixedColumns = list(leftColumns = 1),
+          deferRender = TRUE,
+          scrollY = 600,
+          scroller = TRUE,
+          buttons = list(
+            list(extend = "copy", text = "Copy table"),
+            list(extend = "excel", text = "Download table", title = "availability")
+          )
+        )
+      )
+    )
+  )
+)
+```
+
+
+
+Data and old agricultural transformation {data-orientation=rows}
+=====================================  
+    
+Inputs {.sidebar data-width=400}
+-------------------------------------
+
+
+```{r}
+selectInput("x_var", "X axis", axis_vars[axis_vars != "nothing"], axis_vars[axis_vars == "SL.AGR.EMPL.ZS"], FALSE, TRUE, width = "100%" )
+selectInput("y_var", "Y axis", axis_vars[axis_vars != "nothing"], axis_vars[axis_vars == "NV.AGR.TOTL.ZS"], FALSE, TRUE, width = "100%")
+```
+
+You can set to have all bubles the same size. 
+The bubles are all the same size by default if there is no data for the selected variable/year. 
+To see what 
+
+```{r}
+checkboxInput("same_radius", "Same buble size", value = FALSE)
+selectInput("radius_var", "SIze of the buble", axis_vars, axis_vars[axis_vars == "ndx.scr.gsm.ndx"], FALSE, selectize = TRUE, width = "100%")
+sliderInput("active_year", "Year of analysis", 1990, 2017, 2015,
+  step = 1, round = 0, ticks = TRUE,
+  animate =
+    animationOptions(
+      interval = 1400,
+      loop = FALSE,
+      playButton = icon("play", lib = "glyphicon"),
+      pauseButton = icon("pause", lib = "glyphicon")
+    ),
+  width = "100%",
+  sep = ",",
+  dragRange = FALSE
+)
+```
+
+Here you specify variable for grouping countries into on colour group. If you select "cluster" k-means clustering based on the three selected variables (x, y and size) is performed.
+
+```{r}
+selectInput("colour_var", "Grouping variable", group_vars, group_vars[group_vars == "income"], FALSE, TRUE, width = "100%")
+numericInput("number_of_clusters", "Provide number of clusters", 5, 2, 100, 1, width = "100%")
+```
+
+
+
+ 
+```{r}
+colour_var <- reactive(input$colour_var)
+
+filter_data <-
+  reactive(
+    {
+      if (!input$same_radius) radius <- input$radius_var else radius <- NULL
+      pd %>% 
+        filter(var_code %in% c(input$x_var, input$y_var, radius)) %>%
+        filter(year == input$active_year) 
+    }
+  )
+
+export_data <-
+  reactive({
+    filter_data() %>%
+      mutate(var = str_trunc(var, 25)) %>%
+      select(country, region, income, year, val, flag, var) %>%
+      {
+        dta <- .
+        ident <- dta %>% distinct(country, region, income, year)
+        vals <- dta %>%
+          select(country, year, val, var) %>%
+          spread(var, val)
+        flags <- dta %>%
+          select(country, year, flag, var) %>%
+          mutate(var = str_c(var, " - FLAG")) %>%
+          spread(var, flag)
+        ident %>%
+          left_join(vals, c("country", "year")) %>%
+          left_join(flags, c("country", "year")) %>%
+          mutate_at(vars(contains("flag")), funs(ifelse(is.na(.), "Missing", .)))
+      } %>% 
+      arrange(country)
+  })
+
+zero_vars <-
+  reactive({
+    zero_vars <-
+      filter_data() %>%
+      group_by(var, var_code, flag) %>%
+      count() %>%
+      spread(flag, n) %>%
+      ungroup() %>%
+      mutate_all(funs(ifelse(is.na(.), 0, .))) %>%
+      rename(Variable = var)
+
+    if (!"Imputed" %in% names(zero_vars)) {
+      zero_vars <-
+        zero_vars %>%
+        mutate(Imputed = 0)
+    }
+    zero_vars <- 
+      zero_vars %>% 
+      mutate(
+        no_data = Original == 0 & Imputed == 0
+      )
+    zero_vars
+  })
+
+zero_message <-
+  reactive({
+    zero_vars() %>%
+      as.list() %>%
+      transpose() %>%
+      map(.f = function(x) {
+        tags$p(
+          str_c(
+            "Variable ", x$Variable, " contains: ",
+            x$Original, " original, ",
+            x$Imputed, " imputed and ",
+            x$Missing, " missing values."
+          )
+        )
+      }) %>%
+      tagList() %>%
+      return()
+  })
+
+plot_data <-
+  reactive({
+    contains_data <-
+      zero_vars() %>%
+      filter(!no_data) %>%
+      pull(var_code)
+
+    contains_zero <-
+      zero_vars() %>%
+      filter(no_data) %>%
+      pull(var_code)
+
+    if (!is.null(contains_data) & length(contains_data) < 2) return(NULL)
+
+    flt_data <- filter_data()
+
+    if (!is.null(contains_data) & length(contains_zero) > 0) {
+      flt_data <-
+        flt_data %>%
+        filter(var_code != contains_zero)
+    }
+
+    flt_data %>%
+      select(-var) %>%
+      {
+        dta <- .
+        flags <-
+          dta %>%
+          group_by(country, year) %>%
+          summarise(flag = ifelse(all(flag == "Original"), "Original",
+            ifelse(all(flag == "Imputed"), "Imputed", "Partial")
+          ))
+        dta %>%
+          select(-flag, -`Variable group`, -Source) %>%
+          spread(var_code, val) %>%
+          left_join(flags, by = c("country", "year"))
+      } %>%
+      mutate(
+        flag = factor(flag, levels = c("Original", "Partial", "Imputed"))
+      ) %>%
+      drop_na()
+  })
+
+colours_calc <-
+  reactive({
+    if (colour_var() == "cluster") {
+      radius <- input$radius_var
+      if (is.na(radius)) radius <- NULL
+      plot_data() %>%
+        select(matches("\\.")) %>% 
+        kmeans(input$number_of_clusters) %>%
+        return()
+    } else {
+      return(NULL)
+    }
+  })
+
+plot_data_2 <-
+  reactive({
+    req(plot_data())
+    clusters <- colours_calc()
+
+    if (colour_var() == "cluster" & !is.null(clusters)) {
+      plot_data() %>%
+        mutate(cluster = factor(clusters$cluster)) %>%
+        return()
+    } else {
+      plot_data() %>%
+        return()
+    }
+  })
+
+build_plot <-
+  reactive({
+    req(plot_data_2())
+    if (!input$same_radius) {
+      radius <- axis_vars[axis_vars == input$radius_var]
+      orig_imput_values <-
+        zero_vars() %>%
+        filter(var_code == radius) %>%
+        gather(var, val, Original, Imputed) %>%
+        pull(val)
+    } else {
+      orig_imput_values <- 1
+      radius <- NULL
+    }
+
+    if (!is.null(radius) && all(orig_imput_values == 0)) radius <- NULL
+
+    plot_scattered_countries(
+      plot_data_2(),
+      x_var = axis_vars[axis_vars == input$x_var],
+      y_var = axis_vars[axis_vars == input$y_var],
+      radius_var = radius,
+      colour_var = group_vars[group_vars == input$colour_var]
+    )
+  })
+
+```
+
+
+
+Row {.tabset}
+-------------------------------------
+
+### Stage of Agricultural Development
+
+If the plot does not appear, check the data summary table. It is possible, that there is no data for one or more variable and therefore, the plot cannot be built.
+    
+```{r}
+fluidPage(
+  fluidRow(
+    renderUI(
+      zero_message()
+    ),
+    renderPlot({
+      p <- build_plot()
+      print(p)
+    }, width = "auto", height = 450)
+  )
+)
+
+```
+
+### Data availability and data export
+
+```{r}
+fluidPage(
+  # fluidRow(
+  #   tags$h3("Data availability")
+  # ),
+  # fluidRow(
+  #   DT::renderDataTable( #
+  #     DT::datatable(
+  #       zero_vars() %>%
+  #         select(-var_code),
+  #       rownames = FALSE,
+  #       options = list(
+  #         pageLength = 25,
+  #         dom = c("Brti")
+  #       )
+  #     )
+  #   )
+  # ),
+  fluidRow(tags$h3("Data for export")),
+  fluidRow(
+    DT::renderDataTable( #
+      DT::datatable(
+        export_data(),
+        rownames = FALSE,
+        extensions = c("Buttons", "Scroller"),
+        options = list(
+          pageLength = 40,
+          dom = c("Bfrtip"),
+          scrollX = TRUE,
+          # fixedColumns = list(leftColumns = 1),
+          deferRender = TRUE,
+          scrollY = 600,
+          scroller = TRUE,
+          buttons = list(
+            list(extend = "copy", text = "Copy table"),
+            list(extend = "excel", text = "Download table", title = "availability")
+          )
+        )
+      )
+    )
+  )
+)
+```
+
+
+### Clusters
+
+```{r}
+colours_calc
+```
+
+
+
+
+Data availability
+=====================================  
+
+Number of countries by variable and year. We do not show data for 1960-1990 because there is very little relevant data there. We also do extrapolation in order to fill the gaps, when data does not exist.
+
+```{r}
+availability <- 
+  pd %>%
+  group_by(Source, `Variable group`, var, flag, year) %>%
+  count() %>%
+  ungroup() %>%
+  filter(year > 1995) %>%
+  # mutate(val = str_c(flag, " ", n, "\n")) %>%
+  # select(-n) %>%
+  ungroup() %>%
+  spread(flag, n) %>%
+  mutate_at(vars(Imputed, Missing, Original), funs(ifelse(is.na(.), 0, .))) %>%
+  mutate(status = str_c(
+    ifelse(Original > 0, str_c("Original: ", Original, "\n"), ""),
+    ifelse(Imputed > 0, str_c("Imputed: ", Imputed, "\n"), ""),
+    ifelse(Missing > 0, str_c("Missing: ", Missing, "\n"), "")
+  )) %>%
+  select(-Imputed,-Missing,-Original) %>%
+  spread(year, status) %>%
+  arrange(Source, `Variable group`, var) %>%
+  rename(Variable = var) %>%
+  select(matches("\\D"), sort(names(.)[str_detect(names(.), "^(\\d{4})")], decreasing = T))
+
+DT::renderDataTable( #
+  DT::datatable(
+    availability,
+    rownames = FALSE,
+    extensions = c("Buttons", "Scroller"),
+    options = list(
+      pageLength = 25,
+      dom = c("Bfrtip"),
+      scrollX = TRUE,
+      # fixedColumns = list(leftColumns = 1),
+      deferRender = TRUE,
+      scrollY = 400,
+      scroller = TRUE,
+      buttons = list(
+        list(extend = "copy", text = "Copy table"),
+        list(extend = "excel", text = "Download table", title = "availability")
+      )
+    )
+  )
+)
+```
+
