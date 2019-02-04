@@ -1,0 +1,7 @@
+*old/*
+*data/*
+xls
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
